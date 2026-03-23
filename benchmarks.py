@@ -13,6 +13,8 @@ from torch.testing._internal.distributed._tensor.common_dtensor import (
 from torchvision.models import resnet18, resnet50
 from graph_prof import GraphProfiler
 from graph_tracer import SEPFunction, compile
+import sys
+import matplotlib.pyplot as plt
 
 
 model_names: List[str] = [
@@ -118,8 +120,74 @@ class Experiment:
         print("Successful.")
 
 
+def run_memory_sweep(
+    model_name: str,
+    batch_sizes: List[int],
+    output_path: str = "peak_memory.png",
+) -> None:
+    """
+    Sweep over batch sizes, measure peak GPU memory per
+    iteration (no activation checkpointing), and save a bar chart.
+    """
+    peak_memories_mb: List[float] = []
+
+    for bs in batch_sizes:
+        print(f"[memory sweep] {model_name}  batch_size={bs} ...")
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+
+        exp = Experiment(model_name, bs)
+        exp.init_opt_states()
+
+        # warm up iterations (not measured)
+        for _ in range(2):
+            exp.run()
+
+        torch.cuda.reset_peak_memory_stats()
+
+        # measurement iterations
+        for _ in range(3):
+            exp.run()
+
+        peak_mb = torch.cuda.max_memory_allocated() / (1024 ** 2)
+        peak_memories_mb.append(peak_mb)
+        print(f"  -> peak memory: {peak_mb:.1f} MB")
+
+        del exp
+        torch.cuda.empty_cache()
+
+    labels = [str(bs) for bs in batch_sizes]
+    _, ax = plt.subplots(figsize=(8, 5))
+    bars = ax.bar(labels, peak_memories_mb, color="steelblue", edgecolor="black")
+    ax.bar_label(bars, fmt="%.0f MB", padding=4, fontsize=9)
+    ax.set_xlabel("Mini-batch size")
+    ax.set_ylabel("Peak GPU Memory (MB)")
+    ax.set_title(f"Peak GPU Memory vs Mini-batch Size\n{model_name} — no Activation Checkpointing")
+    ax.set_ylim(0, max(peak_memories_mb) * 1.15)
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    print(f"Saved bar chart to {output_path}")
+
+
 if __name__ == "__main__":
-    exp = Experiment(model_names[1], model_batch_sizes[model_names[1]])
+    MODEL = "Transformer"  
+
+    if len(sys.argv) > 1:
+        arg = sys.argv[1]
+        if arg in model_names:
+            MODEL = arg
+        else:
+            print(f"Warning: unrecognized model name '{arg}', using default '{MODEL}'")
+
+    SWEEP_BATCH_SIZES = [1, 2, 4, 8, 16, 32]
+
+    # 4a
+    print(f"\n=== 4(a) Graph Profiler — {MODEL} ===")
+    exp = Experiment(MODEL, model_batch_sizes[MODEL])
     exp.init_opt_states()
     compiled_fn = compile(exp.train_step, exp.graph_transformation)
     compiled_fn(exp.model, exp.optimizer, exp.example_inputs)
+
+    # 4b
+    print(f"\n=== 4(b) Memory Sweep — {MODEL} ===")
+    run_memory_sweep(MODEL, SWEEP_BATCH_SIZES, output_path="peak_memory.png")
