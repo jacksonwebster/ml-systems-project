@@ -135,7 +135,7 @@ class GraphProfiler(fx.Interpreter):
     def run(
         self,
         *args,
-        initial_env: Dict[fx.Node, Any] | None = None,
+        initial_env: Optional[Dict[fx.Node, Any]] = None,
         enable_io_processing: bool = True
     ) -> Any:
         return super().run(
